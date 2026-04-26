@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../api_service.dart';
+import '../gemini_service.dart';
 
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_map_geojson/flutter_map_geojson.dart';
@@ -117,14 +118,17 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
   }
 
   // ─── KPIs (carrusel)
-  final List<Map<String, dynamic>> _apis = [
-    {'icono': Icons.thermostat_rounded,  'valor': '21°',    'label': 'Temperatura',   'tag': 'Templado',  'color': const Color(0xFFE07A3A)},
-    {'icono': Icons.water_drop_rounded,  'valor': '72%',    'label': 'Humedad suelo', 'tag': 'Alta',      'color': const Color(0xFF3AAFC4)},
-    {'icono': Icons.cloud_rounded,       'valor': '2 mm',   'label': 'Precipitación', 'tag': 'Baja',      'color': const Color(0xFF6B55CC)},
-    {'icono': Icons.air_rounded,         'valor': '10 km/h','label': 'Viento',        'tag': 'Suave',     'color': const Color(0xFF3A7ACC)},
-    {'icono': Icons.wb_sunny_rounded,    'valor': '6.5',    'label': 'Índice UV',     'tag': 'Moderado',  'color': const Color(0xFFCC9500)},
-    {'icono': Icons.compost_rounded,     'valor': 'pH 6.8', 'label': 'Acidez suelo',  'tag': 'Óptimo',    'color': const Color(0xFF2EA855)},
+  List<Map<String, dynamic>> _apis = [
+    {'icono': Icons.thermostat_rounded,     'valor': '--',  'label': 'Temp. mínima hoy',    'tag': 'Cargando', 'color': const Color(0xFFE07A3A)},
+    {'icono': Icons.thermostat_outlined,    'valor': '--',  'label': 'Temp. mañana',         'tag': 'Cargando', 'color': const Color(0xFFCC6B2A)},
+    {'icono': Icons.water_drop_rounded,     'valor': '--',  'label': 'Temp. suelo',          'tag': 'Cargando', 'color': const Color(0xFF3AAFC4)},
+    {'icono': Icons.warning_amber_rounded,  'valor': '--',  'label': 'Riesgo helada',        'tag': 'Cargando', 'color': const Color(0xFF3A7ACC)},
+    {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Mayo',      'tag': 'Cargando', 'color': const Color(0xFF2EA855)},
+    {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Junio',     'tag': 'Cargando', 'color': const Color(0xFF6B55CC)},
+    {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Julio',     'tag': 'Cargando', 'color': const Color(0xFF9E6B45)},
+    {'icono': Icons.show_chart_rounded,     'valor': '--',  'label': 'Anomalía Mayo',        'tag': 'Cargando', 'color': const Color(0xFFCC9500)},
   ];
+  int _carouselKey = 0;
 
   // ─── Distribución de cultivos
   final List<_CropData> _cultivos = const [
@@ -137,8 +141,12 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
   ];
 
   final List<Map<String, dynamic>> _chatMessages = [
-    {'from': 'bot', 'text': '👋 ¡Hola! Soy GreenBot.\nPronto podré ayudarte con tu parcela.'},
+    {'from': 'bot', 'text': '👋 ¡Hola! Soy GreenBot.\n¿En qué puedo ayudarte hoy con tu parcela?'},
   ];
+
+  // Historial en formato Gemini para mantener contexto
+  final List<Map<String, dynamic>> _geminiHistory = [];
+  bool _isBotTyping = false;
 
   late final TextStyle _displayStyle;
   late final TextStyle _bodyStyle;
@@ -226,15 +234,108 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
 
   Future<void> _loadClimateData() async {
     try {
-      final frost = await ApiService.getFrostCheck();
+      debugPrint('🌡️ Cargando datos del backend...');
+
+      // Llama a ambos endpoints en paralelo
+      final results = await Future.wait([
+        ApiService.getFrostCheck(lat: _initialCenter.latitude, lon: _initialCenter.longitude),
+        ApiService.getMonthlyRisk(lat: _initialCenter.latitude, lon: _initialCenter.longitude, monthsAhead: 3),
+      ]);
+
+      final frost   = results[0];
+      final monthly = results[1];
+      debugPrint('✅ frost-check: $frost');
+      debugPrint('✅ monthly-risk: $monthly');
+
+      // ── Datos de frost-check ──────────────────────────
+      final todayMin    = frost['air_temperature']['today_min_celsius'];
+      final tomorrowMin = frost['air_temperature']['tomorrow_min_celsius'];
+      final soilTemp    = frost['soil_temperature']['lst_celsius'];
+      final frostRisk   = frost['frost_risk'] as String? ?? '';
+      final geeError    = frost['metadata']['gee_error'];
+
+      final riskLabel = frostRisk == 'LOW'    ? 'Sin riesgo'
+                      : frostRisk == 'MEDIUM' ? '⚠️ Precaución'
+                      : frostRisk == 'HIGH'   ? '🚨 Alto'
+                      : 'N/D';
+      final riskColor = frostRisk == 'LOW'    ? const Color(0xFF2EA855)
+                      : frostRisk == 'MEDIUM' ? const Color(0xFFCC9500)
+                      : const Color(0xFFCC4444);
+
+      // ── Datos de monthly-risk ─────────────────────────
+      final forecasts = monthly['forecasts'] as List? ?? [];
+      final f0 = forecasts.isNotEmpty ? forecasts[0] : null;
+      final f1 = forecasts.length > 1 ? forecasts[1] : null;
+      final f2 = forecasts.length > 2 ? forecasts[2] : null;
+
+      String _frostTag(String? risk) =>
+          risk == 'LOW' ? 'Sin riesgo' : risk == 'MEDIUM' ? '⚠️ Precaución' : risk == 'HIGH' ? '🚨 Alto' : 'N/D';
+
       setState(() {
-        final todayMin = frost['air_temperature']['today_min_celsius'];
-        _apis[0]['valor'] = '$todayMin°';
-        final soilTemp = frost['soil_temperature']['lst_celsius'];
-        _apis[1]['valor'] = '$soilTemp°';
+        // Card 0 — Temp mínima hoy
+        _apis[0] = Map.from(_apis[0])
+          ..['valor'] = todayMin != null ? '$todayMin°C' : '--'
+          ..['tag']   = riskLabel
+          ..['color'] = const Color(0xFFE07A3A);
+
+        // Card 1 — Temp mínima mañana
+        _apis[1] = Map.from(_apis[1])
+          ..['valor'] = tomorrowMin != null ? '$tomorrowMin°C' : '--'
+          ..['tag']   = riskLabel;
+
+        // Card 2 — Temp suelo
+        _apis[2] = Map.from(_apis[2])
+          ..['valor'] = soilTemp != null ? '$soilTemp°C' : (geeError != null ? 'N/D' : '--')
+          ..['tag']   = soilTemp != null ? 'GEE/ERA5' : 'No disponible';
+
+        // Card 3 — Riesgo helada
+        _apis[3] = Map.from(_apis[3])
+          ..['valor'] = frostRisk.isNotEmpty ? frostRisk : '--'
+          ..['tag']   = riskLabel
+          ..['color'] = riskColor;
+
+        // Card 4 — Pronóstico mes 1
+        if (f0 != null) {
+          _apis[4] = Map.from(_apis[4])
+            ..['valor'] = '${f0['temp_min_forecast_celsius']}°C'
+            ..['label'] = f0['month_label'] ?? 'Mes 1'
+            ..['tag']   = _frostTag(f0['frost_risk']);
+        }
+
+        // Card 5 — Pronóstico mes 2
+        if (f1 != null) {
+          _apis[5] = Map.from(_apis[5])
+            ..['valor'] = '${f1['temp_min_forecast_celsius']}°C'
+            ..['label'] = f1['month_label'] ?? 'Mes 2'
+            ..['tag']   = _frostTag(f1['frost_risk']);
+        }
+
+        // Card 6 — Pronóstico mes 3
+        if (f2 != null) {
+          _apis[6] = Map.from(_apis[6])
+            ..['valor'] = '${f2['temp_min_forecast_celsius']}°C'
+            ..['label'] = f2['month_label'] ?? 'Mes 3'
+            ..['tag']   = _frostTag(f2['frost_risk']);
+        }
+
+        // Card 7 — Anomalía mes 1
+        if (f0 != null) {
+          final anomaly = f0['temp_anomaly_celsius'] as num?;
+          final sign    = anomaly != null && anomaly >= 0 ? '+' : '';
+          _apis[7] = Map.from(_apis[7])
+            ..['valor'] = anomaly != null ? '$sign${anomaly}°C' : '--'
+            ..['label'] = 'Anomalía ${f0['month_label'] ?? ''}'
+            ..['tag']   = anomaly != null && anomaly.abs() < 0.5 ? 'Normal'
+                        : anomaly != null && anomaly > 0 ? 'Más cálido'
+                        : 'Más frío';
+        }
+
+        _carouselKey++;
       });
+
+      debugPrint('🔄 Carrusel actualizado con ${_apis.length} cards');
     } catch (e) {
-      debugPrint('❌ Error: $e');
+      debugPrint('❌ Error cargando clima: $e');
     }
   }
 
@@ -250,13 +351,47 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  void _sendMessage() {
+  Future<void> _sendMessage() async {
     final text = _chatController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isBotTyping) return;
+
+    // 1. Muestra el mensaje del usuario inmediatamente
     setState(() {
       _chatMessages.add({'from': 'user', 'text': text});
+      _isBotTyping = true;
       _chatController.clear();
     });
+
+    // 2. Agrega al historial de Gemini
+    _geminiHistory.add({'role': 'user', 'text': text});
+
+    try {
+      // 3. Llama a Gemini (con function calling automático al backend)
+      final botReply = await GeminiService.sendMessage(
+        userMessage: text,
+        history: _geminiHistory.length > 1
+            ? _geminiHistory.sublist(0, _geminiHistory.length - 1)
+            : [],
+      );
+
+      // 4. Guarda la respuesta en el historial
+      _geminiHistory.add({'role': 'model', 'text': botReply});
+
+      if (!mounted) return;
+      setState(() {
+        _chatMessages.add({'from': 'bot', 'text': botReply});
+        _isBotTyping = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _chatMessages.add({
+          'from': 'bot',
+          'text': '⚠️ Error al conectar con GreenBot. Verifica tu conexión e intenta de nuevo.',
+        });
+        _isBotTyping = false;
+      });
+    }
   }
 
   Widget _fadeIn(Animation<double> anim, Widget child, {double dy = 12}) {
@@ -872,6 +1007,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
       child: NotificationListener<ScrollNotification>(
         onNotification: (_) => true,
         child: ListView.builder(
+          key: ValueKey(_carouselKey),
           controller: scrollController,
           scrollDirection: Axis.horizontal,
           physics: const NeverScrollableScrollPhysics(),
@@ -1132,34 +1268,34 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.all(16),
-            itemCount: _chatMessages.length + 1,
+            itemCount: _chatMessages.length + (_isBotTyping ? 1 : 0),
             itemBuilder: (context, i) {
-              if (i == _chatMessages.length) {
-                return Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: _kPrimaryGhost,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _kBorder, width: 0.8),
+              // Indicador "escribiendo..." al final
+              if (_isBotTyping && i == _chatMessages.length) {
+                return Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: _kPrimaryGhost,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(16),
+                        topRight: Radius.circular(16),
+                        bottomRight: Radius.circular(16),
+                        bottomLeft: Radius.circular(4),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const _PulseDot(color: _kInkSoft),
-                          const SizedBox(width: 8),
-                          Text(
-                            'API en desarrollo',
-                            style: _bodyStyle.copyWith(
-                              fontSize: 15,
-                              color: _kInk,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
+                      border: Border.all(color: _kBorder, width: 0.8),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _PulseDot(color: _kPrimaryDark),
+                        SizedBox(width: 6),
+                        _PulseDot(color: _kPrimary),
+                        SizedBox(width: 6),
+                        _PulseDot(color: _kPrimaryDark),
+                      ],
                     ),
                   ),
                 );
