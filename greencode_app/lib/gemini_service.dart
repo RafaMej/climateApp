@@ -15,7 +15,7 @@ import 'api_service.dart';
 class GeminiService {
   // ── CONFIGURACIÓN ──────────────────────────────────────────
   // Obtén tu API key en: https://aistudio.google.com/app/apikey
-  static const String _apiKey = 'AIzaSyCu3tcz1reSqJcqtfwGKjcLwmQIXSuc7mk';
+  static const String _apiKey = 'AIzaSyBb585NCqp99hy3NXeulTecatGrO0wZKqI';
   static const String _model  = 'gemini-flash-latest';
   static const String _baseUrl =
       'https://generativelanguage.googleapis.com/v1beta/models'
@@ -546,10 +546,11 @@ $_documentContext
     return _extractText(responseBody);
   }
 
-  // ── LLAMADA HTTP A GEMINI ──────────────────────────────────
+  // ── LLAMADA HTTP A GEMINI (con retry automático) ──────────
   static Future<http.Response> _callGemini(
-    List<Map<String, dynamic>> contents,
-  ) async {
+    List<Map<String, dynamic>> contents, {
+    int attempt = 1,
+  }) async {
     final body = jsonEncode({
       'system_instruction': {
         'parts': [{'text': _systemPrompt}],
@@ -563,11 +564,30 @@ $_documentContext
       },
     });
 
-    return http.post(
+    final response = await http.post(
       Uri.parse(_baseUrl),
       headers: {'Content-Type': 'application/json'},
       body: body,
     ).timeout(const Duration(seconds: 30));
+
+    // Si es rate limit y quedan intentos, espera y reintenta
+    if (response.statusCode == 429 && attempt <= 3) {
+      // Extrae el tiempo de espera del mensaje de error si está disponible
+      int waitSeconds = attempt * 20; // backoff: 20s, 40s, 60s
+      try {
+        final err = jsonDecode(response.body);
+        final msg = err['error']?['message'] as String? ?? '';
+        final match = RegExp(r'retry in (\d+)').firstMatch(msg);
+        if (match != null) {
+          waitSeconds = int.parse(match.group(1)!) + 2;
+        }
+      } catch (_) {}
+
+      await Future.delayed(Duration(seconds: waitSeconds));
+      return _callGemini(contents, attempt: attempt + 1);
+    }
+
+    return response;
   }
 
   // ── HELPERS ───────────────────────────────────────────────
@@ -589,9 +609,13 @@ $_documentContext
           .toList();
       return textParts.join('\n').trim();
     } catch (e) {
-      // Manejo de errores de la API
       if (responseBody['error'] != null) {
-        final err = responseBody['error'];
+        final err    = responseBody['error'];
+        final msg    = err['message'] as String? ?? '';
+        final code   = err['code'] as int? ?? 0;
+        if (code == 429 || msg.contains('quota') || msg.contains('rate')) {
+          return '⏳ GreenBot está recibiendo muchas consultas. Espera unos segundos e intenta de nuevo.';
+        }
         return '⚠️ Error de GreenBot: ${err['message'] ?? 'Error desconocido'}';
       }
       return '⚠️ No pude procesar la respuesta. Intenta de nuevo.';
