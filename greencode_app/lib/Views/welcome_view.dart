@@ -20,35 +20,37 @@ class MapView extends StatefulWidget {
 }
 
 class _MapViewState extends State<MapView> with TickerProviderStateMixin {
-  // ───── PALETA AQUA TRANQUILO / LETRAS OSCURAS ─────
-  static const Color _kPrimary     = Color(0xFF7ABFCC); // aqua tranquilo
-  static const Color _kPrimaryMid  = Color(0xFF5EA8B7); // medio
-  static const Color _kPrimaryDark = Color(0xFF3D8A99); // teal apagado
-  static const Color _kPrimarySoft = Color(0xFFC2E4EB); // muy claro
-  static const Color _kAccent      = Color(0xFF95D0DA); // acento calmado
-  static const Color _kPrimaryGhost= Color(0xFFF0F8FA); // tinte muy suave
+  // ───── PALETA TLALI · VERDES NATURALES (basada en el logo) ─────
+static const Color _kPrimary     = Color(0xFF1FA971); // emerald vibrante
+static const Color _kPrimaryMid  = Color(0xFF118A5A); // verde medio profundo
+static const Color _kPrimaryDark = Color(0xFF0A5C3D); // verde bosque profundo
+static const Color _kPrimarySoft = Color(0xFFA8E6C3); // verde menta claro
+static const Color _kAccent      = Color(0xFF4CD295); // acento brillante
+static const Color _kPrimaryGhost= Color(0xFFE8F8EF); // tinte muy suave
 
-  static const Color _kBg      = Color(0xFFF4F9FA); // fondo casi blanco
-  static const Color _kSurface = Color(0xFFFFFFFF);
-  static const Color _kSidebar = Color(0xFFE8F3F6); // sidebar muy suave
-  static const Color _kBorder  = Color(0xFFADD6DF); // borde aqua claro
-  static const Color _kDivider = Color(0xFFCFE8ED);
+// ── FONDOS Y SUPERFICIES
+static const Color _kBg      = Color(0xFFF5FAF6); // fondo casi blanco con tinte verde
+static const Color _kSurface = Color(0xFFFFFFFF);
+static const Color _kSidebar = Color(0xFFE6F4EB); // sidebar verde suave
+static const Color _kBorder  = Color(0xFFAFDCC0); // borde verde claro
+static const Color _kDivider = Color(0xFFCFE7D7);
 
-  // ── LETRAS OSCURAS
-  static const Color _kInk     = Color(0xFF0F2D33); // texto principal muy oscuro
-  static const Color _kInkMid  = Color(0xFF1A4F5A); // texto medio
-  static const Color _kInkSoft = Color(0xFF3D7A85); // texto suave
+// ── LETRAS OSCURAS
+static const Color _kInk     = Color(0xFF0A2E1F); // texto principal verde casi negro
+static const Color _kInkMid  = Color(0xFF1A4D33); // texto medio
+static const Color _kInkSoft = Color(0xFF4A7A5E); // texto suave
 
-  // ───── COLORES POR CAPA ─────
-  static const Color _kColorPuebla     = Color(0xFF5A7F8A);
-  static const Color _kColorAtlixco    = Color(0xFF5EA8B7);
-  static const Color _kColorUsoSuelo   = Color(0xFF9E6B45);
-  static const Color _kColorEdafologia = Color(0xFF3DAB6E);
+// ───── COLORES POR CAPA (alto contraste sobre satelital) ─────
+static const Color _kColorPuebla     = Color(0xFF6366F1); // índigo — límite estatal
+static const Color _kColorAtlixco    = Color(0xFF10D177); // emerald brillante — el valle
+static const Color _kColorUsoSuelo   = Color(0xFFF59E0B); // ámbar dorado — cosecha
+static const Color _kColorEdafologia = Color(0xFFB85C38); // terracota — el suelo mismo
 
-  // Mapa
+  // Mapa — Coordenadas del Valle de Atlixco
   final MapController _mapController = MapController();
-  final LatLng _initialCenter = const LatLng(19.0414, -98.2063);
-  double _currentZoom = 9.0;
+  final LatLng _initialCenter = const LatLng(18.9075, -98.4373); // Valle de Atlixco
+  final double _initialZoom = 11.5;
+  double _currentZoom = 11.5;
   bool _mapExpanded = false;
 
   // Carrusel infinito
@@ -58,76 +60,146 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
   static const double _cardWidthMobile = 280.0;
   static const double _carouselSpeed   = 40.0;
 
+  bool _pointInPolygon(LatLng point, List<LatLng> polygon) {
+  bool inside = false;
+  int j = polygon.length - 1;
+  for (int i = 0; i < polygon.length; i++) {
+    final xi = polygon[i].longitude, yi = polygon[i].latitude;
+    final xj = polygon[j].longitude, yj = polygon[j].latitude;
+    final intersect = ((yi > point.latitude) != (yj > point.latitude)) &&
+        (point.longitude < (xj - xi) * (point.latitude - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+    j = i;
+  }
+  return inside;
+}
+
+void _handleMapTap(LatLng tapPoint) {
+  // Recorre capas activas en orden inverso (la última pintada está arriba)
+  for (final capa in _capas.reversed) {
+    if (capa['activa'] != true || capa['loaded'] != true) continue;
+    final parser = capa['parser'] as GeoJsonParser;
+    for (final polygon in parser.polygons) {
+      if (_pointInPolygon(tapPoint, polygon.points)) {
+        // Necesitas las properties del feature — ver nota abajo
+        _showFeatureInfo(
+          {'capa': capa['nombre']}, // placeholder
+          capa['nombre'] as String,
+          capa['color'] as Color,
+        );
+        return;
+      }
+    }
+  }
+  _closeFeatureInfo();
+}
+
   // Mobile sheets
   bool _mobileLayersOpen = false;
   bool _mobileChatOpen   = false;
+  bool _mobileCropsOpen  = false;
+
+  // Desktop: panel de capas flotante sobre el mapa
+  bool _desktopLayersFloatOpen = false;
 
   // Inputs
   final TextEditingController _chatController = TextEditingController();
   final FocusNode _chatFocus = FocusNode();
 
-  // ─── Capas
-  late final List<Map<String, dynamic>> _capas = [
-    {
-      'nombre': 'Estado de Puebla',
-      'subtitulo': 'límite estatal y municipios',
-      'color': _kColorPuebla,
-      'asset': 'assets/geojson/mapaPuebla.geojson',
-      'activa': false,
-      'parser': _makeParser(_kColorPuebla),
-      'loaded': false,
-    },
-    {
-      'nombre': 'Valle de Atlixco',
-      'subtitulo': 'zona agrícola del valle',
-      'color': _kColorAtlixco,
-      'asset': 'assets/geojson/ValleAtlixco.geojson',
-      'activa': false,
-      'parser': _makeParser(_kColorAtlixco),
-      'loaded': false,
-    },
-    {
-      'nombre': 'Edafología',
-      'subtitulo': 'tipos y perfiles de suelo',
-      'color': _kColorEdafologia,
-      'asset': 'assets/geojson/valleAtlixco_edafología.geojson',
-      'activa': false,
-      'parser': _makeParser(_kColorEdafologia),
-      'loaded': false,
-    },
-    {
-      'nombre': 'Uso de suelo',
-      'subtitulo': 'cobertura y uso del territorio',
-      'color': _kColorUsoSuelo,
-      'asset': 'assets/geojson/valleAtlixco_usoSuelo.geojson',
-      'activa': false,
-      'parser': _makeParser(_kColorUsoSuelo),
-      'loaded': false,
-    },
-  ];
+  // Feature info (cuando el usuario toca un polígono)
+  Map<String, dynamic>? _selectedFeatureProps;
+  String? _selectedFeatureLayerName;
+  Color _selectedFeatureColor = _kPrimary;
 
-  static GeoJsonParser _makeParser(Color color) {
-    return GeoJsonParser(
-      defaultPolygonBorderColor: color,
-      defaultPolygonFillColor:   color.withOpacity(0.22),
-      defaultPolygonBorderStroke: 2.0,
-      defaultPolylineColor: color,
-      defaultPolylineStroke: 2.5,
-      defaultMarkerColor: color,
-    );
+  // ─── Capas
+late final List<Map<String, dynamic>> _capas = [
+  {
+    'nombre': 'Estado de Puebla',
+    'subtitulo': 'límite estatal y municipios',
+    'color': const Color(0xFF6366F1), // índigo vibrante
+    'asset': 'assets/geojson/mapaPuebla.geojson',
+    'activa': false,
+    'parser': _makeParser(const Color(0xFF6366F1), 'Estado de Puebla'),
+    'loaded': false,
+  },
+  {
+    'nombre': 'Valle de Atlixco',
+    'subtitulo': 'zona agrícola del valle',
+    'color': const Color(0xFF10D177), // emerald brillante
+    'asset': 'assets/geojson/ValleAtlixco.geojson',
+    'activa': false,
+    'parser': _makeParser(const Color(0xFF10D177), 'Valle de Atlixco'),
+    'loaded': false,
+  },
+  {
+    'nombre': 'Edafología',
+    'subtitulo': 'tipos y perfiles de suelo',
+    'color': const Color(0xFFB85C38), // terracota / barro
+    'asset': 'assets/geojson/valleAtlixco_edafología.geojson',
+    'activa': false,
+    'parser': _makeParser(const Color(0xFFB85C38), 'Edafología'),
+    'loaded': false,
+  },
+  {
+    'nombre': 'Uso de suelo',
+    'subtitulo': 'cobertura y uso del territorio',
+    'color': const Color(0xFFF59E0B), // ámbar dorado / cosecha
+    'asset': 'assets/geojson/valleAtlixco_usoSuelo.geojson',
+    'activa': false,
+    'parser': _makeParser(const Color(0xFFF59E0B), 'Uso de suelo'),
+    'loaded': false,
+  },
+];
+
+GeoJsonParser _makeParser(Color color, String layerName) {
+  final parser = GeoJsonParser(
+    defaultPolygonBorderColor: color,
+    defaultPolygonFillColor:   color.withOpacity(0.22),
+    defaultPolygonBorderStroke: 2.0,
+    defaultPolylineColor: color,
+    defaultPolylineStroke: 2.5,
+    defaultMarkerColor: color,
+  );
+
+    parser.setDefaultMarkerTapCallback((Map<String, dynamic> properties) {
+    _showFeatureInfo(properties, layerName, color);
+  });
+
+  return parser;
+}
+
+  void _showFeatureInfo(Map<String, dynamic> properties, String layerName, Color color) {
+    if (!mounted) return;
+    setState(() {
+      _selectedFeatureProps = properties;
+      _selectedFeatureLayerName = layerName;
+      _selectedFeatureColor = color;
+    });
+  }
+
+  void _closeFeatureInfo() {
+    setState(() {
+      _selectedFeatureProps = null;
+      _selectedFeatureLayerName = null;
+    });
   }
 
   // ─── KPIs (carrusel)
-  List<Map<String, dynamic>> _apis = [
-    {'icono': Icons.thermostat_rounded,     'valor': '--',  'label': 'Temp. mínima hoy',    'tag': 'Cargando', 'color': const Color(0xFFE07A3A)},
-    {'icono': Icons.thermostat_outlined,    'valor': '--',  'label': 'Temp. mañana',         'tag': 'Cargando', 'color': const Color(0xFFCC6B2A)},
-    {'icono': Icons.water_drop_rounded,     'valor': '--',  'label': 'Temp. suelo',          'tag': 'Cargando', 'color': const Color(0xFF3AAFC4)},
-    {'icono': Icons.warning_amber_rounded,  'valor': '--',  'label': 'Riesgo helada',        'tag': 'Cargando', 'color': const Color(0xFF3A7ACC)},
-    {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Mayo',      'tag': 'Cargando', 'color': const Color(0xFF2EA855)},
-    {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Junio',     'tag': 'Cargando', 'color': const Color(0xFF6B55CC)},
-    {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Julio',     'tag': 'Cargando', 'color': const Color(0xFF9E6B45)},
-    {'icono': Icons.show_chart_rounded,     'valor': '--',  'label': 'Anomalía Mayo',        'tag': 'Cargando', 'color': const Color(0xFFCC9500)},
-  ];
+List<Map<String, dynamic>> _apis = [
+  // ── Temperaturas actuales (rojo cálido)
+  {'icono': Icons.thermostat_rounded,     'valor': '--',  'label': 'Temp. mínima hoy',    'tag': 'Cargando', 'color': const Color(0xFFEF4444)},
+  {'icono': Icons.thermostat_outlined,    'valor': '--',  'label': 'Temp. mañana',         'tag': 'Cargando', 'color': const Color(0xFFF87171)},
+  // ── Suelo (terracota — coincide con capa Edafología)
+  {'icono': Icons.water_drop_rounded,     'valor': '--',  'label': 'Temp. suelo',          'tag': 'Cargando', 'color': const Color(0xFFB85C38)},
+  // ── Riesgo / alerta (índigo — coincide con capa Puebla)
+  {'icono': Icons.warning_amber_rounded,  'valor': '--',  'label': 'Riesgo helada',        'tag': 'Cargando', 'color': const Color(0xFF6366F1)},
+  // ── Pronósticos mensuales (gradiente emerald → ámbar, como un calendario que avanza)
+  {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Mayo',      'tag': 'Cargando', 'color': const Color(0xFF10D177)},
+  {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Junio',     'tag': 'Cargando', 'color': const Color(0xFF65C97A)},
+  {'icono': Icons.calendar_month_rounded, 'valor': '--',  'label': 'Pronóstico Julio',     'tag': 'Cargando', 'color': const Color(0xFFF59E0B)},
+  // ── Anomalía / análisis (ámbar — coincide con capa Uso de suelo)
+  {'icono': Icons.show_chart_rounded,     'valor': '--',  'label': 'Anomalía Mayo',        'tag': 'Cargando', 'color': const Color(0xFFD97706)},
+];
   int _carouselKey = 0;
 
   // ─── Distribución de cultivos
@@ -230,6 +302,11 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
     if (max <= 0) return;
     final pos = (_carouselSpeed * totalSecs) % (max + cardW);
     sc.jumpTo(pos.clamp(0.0, max));
+  }
+
+  void _recenterMap() {
+    _mapController.move(_initialCenter, _initialZoom);
+    setState(() => _currentZoom = _initialZoom);
   }
 
   Future<void> _loadClimateData() async {
@@ -407,6 +484,33 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
     );
   }
 
+  // Logo widget reusable
+  Widget _logoWidget({double size = 44, double radius = 12}) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(radius),
+        boxShadow: [
+          BoxShadow(
+            color: _kAccent.withOpacity(0.40),
+            blurRadius: 14,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.all(size * 0.08),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius - 2),
+        child: Image.asset(
+          'assets/logoTlali.png',
+          fit: BoxFit.contain,
+        ),
+      ),
+    );
+  }
+
   // ─────────────────────────────────────────────────
   // BUILD
   // ─────────────────────────────────────────────────
@@ -447,6 +551,19 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                       fullHeight: true,
                       child: _buildChatBody(),
                     ),
+                  if (_mobileCropsOpen)
+                    _MobileSheet(
+                      onClose: () => setState(() => _mobileCropsOpen = false),
+                      title: 'Distribución de cultivos',
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                        child: _CropsCard(
+                          cultivos: _cultivos,
+                          bodyStyle: _bodyStyle,
+                          displayStyle: _displayStyle,
+                        ),
+                      ),
+                    ),
                 ],
               ],
             );
@@ -458,11 +575,6 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
 
   // ─────────────────────────────────────────────────
   // DESKTOP LAYOUT
-  // Layout:
-  //   [Sidebar] | [Header + Carrusel]
-  //              | [Mapa (izq) | Chat+Cultivos (der)]
-  // El chat está a la misma altura que el card de cultivos.
-  // El card de cultivos tiene el mismo ancho que el mapa.
   // ─────────────────────────────────────────────────
   Widget _buildDesktopLayout() {
     return Row(
@@ -521,7 +633,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // ── Columna izquierda: Mapa + Card Cultivos (mismo ancho)
+                      // ── Columna izquierda: Mapa + Card Cultivos
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -530,7 +642,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                             Expanded(
                               child: _fadeIn(_fadeMap, _buildMapCard()),
                             ),
-                            // Card de cultivos debajo del mapa, mismo ancho
+                            // Card de cultivos debajo del mapa (sólo desktop)
                             if (!_mapExpanded) ...[
                               const SizedBox(height: 14),
                               _fadeIn(
@@ -553,7 +665,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                         width: _mapExpanded ? 0 : 20,
                       ),
 
-                      // ── Columna derecha: Chat (mismo alto que mapa+cultivos)
+                      // ── Columna derecha: Chat
                       AnimatedContainer(
                         duration: const Duration(milliseconds: 320),
                         curve: Curves.easeInOutCubic,
@@ -582,6 +694,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
   // MOBILE LAYOUT
   // ─────────────────────────────────────────────────
   Widget _buildMobileLayout(BuildContext context) {
+    final size = MediaQuery.of(context).size;
     return SingleChildScrollView(
       child: Column(
         children: [
@@ -591,27 +704,12 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
               padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
               child: Row(
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [_kPrimarySoft, _kPrimary, _kPrimaryDark],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(color: _kAccent.withOpacity(0.40), blurRadius: 14, offset: const Offset(0, 5)),
-                      ],
-                    ),
-                    child: const Icon(Icons.eco_rounded, color: Colors.white, size: 23),
-                  ),
+                  _logoWidget(size: 44, radius: 12),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Bienvenido',
-                      style: _displayStyle.copyWith(fontSize: 28, color: _kInk),
+                      'Tlali',
+                      style: _displayStyle.copyWith(fontSize: 30, color: _kInk),
                     ),
                   ),
                   Container(
@@ -627,7 +725,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                         const Icon(Icons.location_on_rounded, color: _kPrimaryDark, size: 16),
                         const SizedBox(width: 5),
                         Text(
-                          'Puebla',
+                          'Atlixco',
                           style: _bodyStyle.copyWith(
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
@@ -652,30 +750,33 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
             ),
           ),
 
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-            child: _fadeIn(
-              _fadeCrops,
-              _CropsCard(
-                cultivos: _cultivos,
-                bodyStyle: _bodyStyle,
-                displayStyle: _displayStyle,
-              ),
-            ),
-          ),
-
+          // En móvil NO mostramos el card de cultivos aquí (sólo el mapa con FABs)
           SizedBox(
             height: math.max(
-              420,
-              MediaQuery.of(context).size.height - 480,
+              520,
+              size.height - 280,
             ),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
               child: _fadeIn(
                 _fadeMap,
                 Stack(
                   children: [
                     _buildMapCard(),
+
+                    // ─── FAB de cultivos: arriba-izquierda (círculo)
+                    Positioned(
+                      top: 14,
+                      right: 14,
+                      child: _CropsFab(
+                        primary: _kPrimary,
+                        primaryDark: _kPrimaryDark,
+                        accent: _kAccent,
+                        onTap: () => setState(() => _mobileCropsOpen = true),
+                      ),
+                    ),
+
+                    // ─── FAB de capas: abajo-izquierda
                     Positioned(
                       bottom: 14,
                       left: 14,
@@ -685,6 +786,18 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                         accent: _kAccent,
                         activeCount: _capas.where((c) => c['activa'] == true).length,
                         onTap: () => setState(() => _mobileLayersOpen = true),
+                      ),
+                    ),
+
+                    // ─── Botón recentrar: abajo-derecha
+                    Positioned(
+                      bottom: 14,
+                      right: 14,
+                      child: _RecenterFab(
+                        primary: _kPrimary,
+                        primaryDark: _kPrimaryDark,
+                        accent: _kAccent,
+                        onTap: _recenterMap,
                       ),
                     ),
                   ],
@@ -698,7 +811,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
   }
 
   // ─────────────────────────────────────────────────
-  // SIDEBAR — texto más grande
+  // SIDEBAR
   // ─────────────────────────────────────────────────
   Widget _buildSidebar() {
     return Container(
@@ -717,27 +830,12 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
             ),
             child: Row(
               children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [_kPrimarySoft, _kPrimary, _kPrimaryDark],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(color: _kAccent.withOpacity(0.45), blurRadius: 14, offset: const Offset(0, 4)),
-                    ],
-                  ),
-                  child: const Icon(Icons.eco_rounded, color: Colors.white, size: 22),
-                ),
+                _logoWidget(size: 46, radius: 12),
                 const SizedBox(width: 12),
                 Text(
-                  'GreenCode',
+                  'Tlali',
                   style: _displayStyle.copyWith(
-                    fontSize: 26,
+                    fontSize: 30,
                     color: _kInk,
                     letterSpacing: -0.5,
                   ),
@@ -767,9 +865,9 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                 Text(
                   'BASES DE DATOS',
                   style: _bodyStyle.copyWith(
-                    fontSize: 16,           // ← más grande
+                    fontSize: 16,
                     fontWeight: FontWeight.w800,
-                    color: _kInk,           // ← oscuro
+                    color: _kInk,
                     letterSpacing: 1.4,
                   ),
                 ),
@@ -790,7 +888,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Toca para activar/desactivar cada capa',
+                    'Toca un área del mapa para ver detalles',
                     style: _bodyStyle.copyWith(fontSize: 15, color: _kInkMid, height: 1.3),
                   ),
                 ),
@@ -877,9 +975,9 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                           Text(
                             capa['nombre'],
                             style: _bodyStyle.copyWith(
-                              fontSize: 19,          // ← mucho más grande
+                              fontSize: 19,
                               fontWeight: FontWeight.w800,
-                              color: _kInk,          // ← oscuro siempre
+                              color: _kInk,
                               letterSpacing: -0.2,
                             ),
                           ),
@@ -889,8 +987,8 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: _bodyStyle.copyWith(
-                              fontSize: 15,          // ← más grande
-                              color: _kInkMid,       // ← oscuro legible
+                              fontSize: 15,
+                              color: _kInkMid,
                             ),
                           ),
                         ],
@@ -974,7 +1072,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                 const Icon(Icons.location_on_rounded, color: _kPrimaryDark, size: 17),
                 const SizedBox(width: 6),
                 Text(
-                  'Puebla, México',
+                  'Valle de Atlixco, Puebla',
                   style: _bodyStyle.copyWith(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -1052,6 +1150,9 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
   }
 
   Widget _buildMapCard() {
+    final isMobile = MediaQuery.of(context).size.width < 720;
+    final activeLayersCount = _capas.where((c) => c['activa'] == true).length;
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(22),
       child: Container(
@@ -1072,18 +1173,20 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
                 initialZoom: _currentZoom,
                 minZoom: 4.0,
                 maxZoom: 18.0,
+                onTap: (tapPosition, latLng) => _handleMapTap(latLng),
               ),
               children: [
                 TileLayer(
                   urlTemplate:
+                  
                       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                  userAgentPackageName: 'com.example.greencodeapp',
+                  userAgentPackageName: 'com.example.tlaliapp',
                   maxZoom: 19,
                 ),
                 TileLayer(
                   urlTemplate:
                       'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-                  userAgentPackageName: 'com.example.greencodeapp',
+                  userAgentPackageName: 'com.example.tlaliapp',
                   maxZoom: 19,
                 ),
                 ..._buildActiveLayers(),
@@ -1100,6 +1203,7 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
               ],
             ),
 
+            // Zoom +/-
             Positioned(
               top: 16,
               left: 16,
@@ -1126,76 +1230,98 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
               ),
             ),
 
+            // Botón fullscreen + capas (sólo desktop) + recentrar — esquina superior derecha
             Positioned(
               top: 16,
               right: 16,
-              child: _GlassIconButton(
-                icon: _mapExpanded ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
-                size: 38,
-                onTap: () => setState(() => _mapExpanded = !_mapExpanded),
+              child: Row(
+                children: [
+                  if (!isMobile) ...[
+                    // Botón de capas dentro del mapa (desktop)
+                    _GlassIconButtonWithBadge(
+                      icon: Icons.layers_rounded,
+                      badgeCount: activeLayersCount,
+                      onTap: () => setState(() => _desktopLayersFloatOpen = !_desktopLayersFloatOpen),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  // Botón recentrar (desktop, dentro del map header)
+                  if (!isMobile) ...[
+                    _GlassIconButton(
+                      icon: Icons.my_location_rounded,
+                      size: 38,
+                      onTap: _recenterMap,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  _GlassIconButton(
+                    icon: _mapExpanded ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                    size: 38,
+                    onTap: () => setState(() => _mapExpanded = !_mapExpanded),
+                  ),
+                ],
               ),
             ),
 
-            if (MediaQuery.of(context).size.width >= 720 || _mapExpanded)
+            // Panel flotante de capas (desktop, sobre el mapa)
+            if (!isMobile && _desktopLayersFloatOpen)
               Positioned(
-                left: 16,
-                bottom: 16,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(15),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                    child: Container(
-                      padding: const EdgeInsets.fromLTRB(13, 11, 16, 11),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.92),
-                        borderRadius: BorderRadius.circular(15),
-                        border: Border.all(color: _kAccent.withOpacity(0.4), width: 0.9),
-                        boxShadow: [
-                          BoxShadow(color: _kAccent.withOpacity(0.18), blurRadius: 14, offset: const Offset(0, 4)),
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [_kPrimarySoft, _kPrimary, _kPrimaryDark],
-                              ),
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(color: _kAccent.withOpacity(0.50), blurRadius: 12, offset: const Offset(0, 3)),
-                              ],
-                            ),
-                            child: const Icon(Icons.eco_rounded, color: Colors.white, size: 22),
-                          ),
-                          const SizedBox(width: 13),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                top: 64,
+                right: 16,
+                child: _DesktopLayersFloatPanel(
+                  child: SizedBox(
+                    width: 280,
+                    height: 360,
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 10, 10),
+                          child: Row(
                             children: [
                               Text(
-                                'Mi parcela',
-                                style: _bodyStyle.copyWith(
-                                  fontSize: 19,
-                                  fontWeight: FontWeight.w700,
+                                'Capas',
+                                style: _displayStyle.copyWith(
+                                  fontSize: 20,
                                   color: _kInk,
-                                  letterSpacing: -0.3,
                                 ),
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '19.0414, -98.2063',
-                                style: _bodyStyle.copyWith(fontSize: 15, color: _kInkMid),
+                              const Spacer(),
+                              GestureDetector(
+                                onTap: () => setState(() => _desktopLayersFloatOpen = false),
+                                child: Container(
+                                  width: 30,
+                                  height: 30,
+                                  decoration: BoxDecoration(
+                                    color: _kPrimaryGhost,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(Icons.close_rounded, size: 18, color: _kInk),
+                                ),
                               ),
                             ],
                           ),
-                        ],
-                      ),
+                        ),
+                        Container(height: 0.6, color: _kBorder),
+                        Expanded(child: _buildLayersList(compact: true)),
+                      ],
                     ),
                   ),
+                ),
+              ),
+
+            // Panel flotante con info de feature seleccionado
+            if (_selectedFeatureProps != null)
+              Positioned(
+                left: isMobile ? 14 : 16,
+                bottom: isMobile ? 80 : 16,
+                right: isMobile ? 14 : null,
+                child: _FeatureInfoPanel(
+                  properties: _selectedFeatureProps!,
+                  layerName: _selectedFeatureLayerName ?? 'Información',
+                  color: _selectedFeatureColor,
+                  bodyStyle: _bodyStyle,
+                  displayStyle: _displayStyle,
+                  onClose: _closeFeatureInfo,
                 ),
               ),
           ],
@@ -1402,6 +1528,329 @@ class _MapViewState extends State<MapView> with TickerProviderStateMixin {
 }
 
 // ═══════════════════════════════════════════════════
+// PANEL DE INFORMACIÓN DE FEATURE (al tocar un polígono)
+// ═══════════════════════════════════════════════════
+
+class _FeatureInfoPanel extends StatefulWidget {
+  final Map<String, dynamic> properties;
+  final String layerName;
+  final Color color;
+  final TextStyle bodyStyle;
+  final TextStyle displayStyle;
+  final VoidCallback onClose;
+
+  const _FeatureInfoPanel({
+    required this.properties,
+    required this.layerName,
+    required this.color,
+    required this.bodyStyle,
+    required this.displayStyle,
+    required this.onClose,
+  });
+
+  @override
+  State<_FeatureInfoPanel> createState() => _FeatureInfoPanelState();
+}
+
+class _FeatureInfoPanelState extends State<_FeatureInfoPanel> with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 320))..forward();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  String _formatKey(String key) {
+    // Convierte "tipo_suelo" → "Tipo suelo"; "NOMBRE" → "Nombre"
+    final spaced = key.replaceAll('_', ' ').replaceAll('-', ' ');
+    if (spaced.isEmpty) return spaced;
+    return spaced[0].toUpperCase() + spaced.substring(1).toLowerCase();
+  }
+
+  String _formatValue(dynamic value) {
+    if (value == null) return '—';
+    if (value is num) {
+      if (value % 1 == 0) return value.toInt().toString();
+      return value.toStringAsFixed(2);
+    }
+    return value.toString();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Filtra props vacías o nulas
+    final entries = widget.properties.entries
+        .where((e) => e.value != null && e.value.toString().trim().isNotEmpty)
+        .toList();
+
+    final isMobile = MediaQuery.of(context).size.width < 720;
+    final maxWidth = isMobile ? double.infinity : 360.0;
+    final maxHeight = isMobile ? 280.0 : 380.0;
+
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, __) {
+        final t = Curves.easeOutCubic.transform(_c.value);
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, (1 - t) * 14),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: maxWidth,
+                maxHeight: maxHeight,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.96),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: widget.color.withOpacity(0.4), width: 1.0),
+                      boxShadow: [
+                        BoxShadow(
+                          color: widget.color.withOpacity(0.22),
+                          blurRadius: 22,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Header
+                        Container(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                widget.color.withOpacity(0.15),
+                                widget.color.withOpacity(0.05),
+                              ],
+                            ),
+                            border: Border(
+                              bottom: BorderSide(color: widget.color.withOpacity(0.3), width: 0.8),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 38,
+                                height: 38,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      widget.color,
+                                      Color.lerp(widget.color, Colors.black, 0.3)!,
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(10),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: widget.color.withOpacity(0.45),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 3),
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(Icons.info_rounded, color: Colors.white, size: 20),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      widget.layerName,
+                                      style: widget.displayStyle.copyWith(
+                                        fontSize: 17,
+                                        color: const Color(0xFF0F2D1A),
+                                        letterSpacing: -0.3,
+                                        height: 1.1,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${entries.length} ${entries.length == 1 ? "atributo" : "atributos"}',
+                                      style: widget.bodyStyle.copyWith(
+                                        fontSize: 13,
+                                        color: const Color(0xFF3D7A55),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: widget.onClose,
+                                child: Container(
+                                  width: 32,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.9),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: widget.color.withOpacity(0.3), width: 0.8),
+                                  ),
+                                  child: const Icon(Icons.close_rounded, size: 18, color: Color(0xFF0F2D1A)),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Lista de propiedades
+                        Flexible(
+                          child: entries.isEmpty
+                              ? Padding(
+                                  padding: const EdgeInsets.all(20),
+                                  child: Text(
+                                    'Esta área no tiene atributos asociados.',
+                                    style: widget.bodyStyle.copyWith(
+                                      fontSize: 14,
+                                      color: const Color(0xFF3D7A55),
+                                    ),
+                                  ),
+                                )
+                              : ListView.separated(
+                                  shrinkWrap: true,
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                  itemCount: entries.length,
+                                  separatorBuilder: (_, __) => Divider(
+                                    height: 14,
+                                    thickness: 0.6,
+                                    color: const Color(0xFFB5DCC2).withOpacity(0.6),
+                                  ),
+                                  itemBuilder: (context, i) {
+                                    final e = entries[i];
+                                    return Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        SizedBox(
+                                          width: 110,
+                                          child: Text(
+                                            _formatKey(e.key),
+                                            style: widget.bodyStyle.copyWith(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700,
+                                              color: const Color(0xFF1F4F33),
+                                              letterSpacing: -0.1,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            _formatValue(e.value),
+                                            style: widget.bodyStyle.copyWith(
+                                              fontSize: 14,
+                                              color: const Color(0xFF0F2D1A),
+                                              fontWeight: FontWeight.w500,
+                                              letterSpacing: -0.1,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// PANEL FLOTANTE DE CAPAS (DESKTOP, sobre el mapa)
+// ═══════════════════════════════════════════════════
+
+class _DesktopLayersFloatPanel extends StatefulWidget {
+  final Widget child;
+  const _DesktopLayersFloatPanel({required this.child});
+
+  @override
+  State<_DesktopLayersFloatPanel> createState() => _DesktopLayersFloatPanelState();
+}
+
+class _DesktopLayersFloatPanelState extends State<_DesktopLayersFloatPanel> with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 280))..forward();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, __) {
+        final t = Curves.easeOutCubic.transform(_c.value);
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, (1 - t) * 10),
+            child: Transform.scale(
+              scale: 0.96 + 0.04 * t,
+              alignment: Alignment.topRight,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.96),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFB5DCC2), width: 0.9),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF7BC99A).withOpacity(0.30),
+                          blurRadius: 22,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: widget.child,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════
 // CULTIVOS — Card con donut chart + leyenda
 // ═══════════════════════════════════════════════════
 
@@ -1438,10 +1887,10 @@ class _CropsCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFFFFFFFF),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFADD6DF), width: 0.9),
+        border: Border.all(color: const Color(0xFFB5DCC2), width: 0.9),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF95D0DA).withOpacity(0.20),
+            color: const Color(0xFF7BC99A).withOpacity(0.20),
             blurRadius: 20,
             offset: const Offset(0, 6),
           ),
@@ -1459,35 +1908,36 @@ class _CropsCard extends StatelessWidget {
                   gradient: const LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Color(0xFFC2E4EB), Color(0xFF7ABFCC), Color(0xFF3D8A99)],
+                    colors: [Color(0xFFB8E5C9), Color(0xFF4CAF7A), Color(0xFF1E6B45)],
                   ),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
               const SizedBox(width: 12),
-              Text(
-                'Distribución de cultivos',
-                style: displayStyle.copyWith(
-                  fontSize: isMobile ? 22 : 26,     // ← más grande
-                  color: const Color(0xFF0F2D33),
-                  letterSpacing: -0.4,
+              Expanded(
+                child: Text(
+                  'Distribución de cultivos',
+                  style: displayStyle.copyWith(
+                    fontSize: isMobile ? 22 : 26,
+                    color: const Color(0xFF0F2D1A),
+                    letterSpacing: -0.4,
+                  ),
                 ),
               ),
-              const Spacer(),
               if (!isMobile)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF0F8FA),
+                    color: const Color(0xFFEFF8F2),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFADD6DF), width: 0.8),
+                    border: Border.all(color: const Color(0xFFB5DCC2), width: 0.8),
                   ),
                   child: Text(
                     '${cultivos.length} cultivos',
                     style: bodyStyle.copyWith(
-                      fontSize: 16,              // ← más grande
+                      fontSize: 16,
                       fontWeight: FontWeight.w700,
-                      color: const Color(0xFF1A4F5A),
+                      color: const Color(0xFF1F4F33),
                     ),
                   ),
                 ),
@@ -1581,9 +2031,9 @@ class _CropsLegend extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: bodyStyle.copyWith(
-                                fontSize: isMobile ? 18 : 19,   // ← más grande
+                                fontSize: isMobile ? 18 : 19,
                                 fontWeight: FontWeight.w800,
-                                color: const Color(0xFF0F2D33),
+                                color: const Color(0xFF0F2D1A),
                                 letterSpacing: -0.2,
                                 height: 1.2,
                               ),
@@ -1593,7 +2043,7 @@ class _CropsLegend extends StatelessWidget {
                                 Text(
                                   '$pct%',
                                   style: bodyStyle.copyWith(
-                                    fontSize: isMobile ? 15 : 16,  // ← más grande
+                                    fontSize: isMobile ? 15 : 16,
                                     fontWeight: FontWeight.w700,
                                     color: cultivo.color,
                                     letterSpacing: -0.2,
@@ -1602,8 +2052,8 @@ class _CropsLegend extends StatelessWidget {
                                 Text(
                                   '  ${cultivo.hectareas.toStringAsFixed(1)} ha',
                                   style: bodyStyle.copyWith(
-                                    fontSize: isMobile ? 15 : 16,  // ← más grande
-                                    color: const Color(0xFF3D7A85),
+                                    fontSize: isMobile ? 15 : 16,
+                                    color: const Color(0xFF3D7A55),
                                     letterSpacing: -0.1,
                                   ),
                                 ),
@@ -1686,7 +2136,7 @@ class _DonutChartState extends State<_DonutChart> with SingleTickerProviderState
                     widget.total.toStringAsFixed(0),
                     style: widget.displayStyle.copyWith(
                       fontSize: widget.centerSize,
-                      color: const Color(0xFF0F2D33),
+                      color: const Color(0xFF0F2D1A),
                       letterSpacing: -0.6,
                       height: 1,
                     ),
@@ -1696,7 +2146,7 @@ class _DonutChartState extends State<_DonutChart> with SingleTickerProviderState
                     'hectáreas',
                     style: widget.bodyStyle.copyWith(
                       fontSize: widget.labelSize,
-                      color: const Color(0xFF3D7A85),
+                      color: const Color(0xFF3D7A55),
                       fontWeight: FontWeight.w600,
                       height: 1,
                     ),
@@ -1845,7 +2295,7 @@ class _ApiCardState extends State<_ApiCard> with SingleTickerProviderStateMixin 
                     overflow: TextOverflow.ellipsis,
                     style: widget.displayStyle.copyWith(
                       fontSize: 28,
-                      color: const Color(0xFF0F2D33),
+                      color: const Color(0xFF0F2D1A),
                       letterSpacing: -0.5,
                       height: 1.1,
                     ),
@@ -1856,7 +2306,7 @@ class _ApiCardState extends State<_ApiCard> with SingleTickerProviderStateMixin 
                     overflow: TextOverflow.ellipsis,
                     style: widget.bodyStyle.copyWith(
                       fontSize: 16,
-                      color: const Color(0xFF3D7A85),
+                      color: const Color(0xFF3D7A55),
                       letterSpacing: -0.1,
                       height: 1.3,
                     ),
@@ -1904,9 +2354,9 @@ class _GlassControlStack extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(0.88),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF95D0DA).withOpacity(0.45), width: 0.9),
+            border: Border.all(color: const Color(0xFF7BC99A).withOpacity(0.45), width: 0.9),
             boxShadow: [
-              BoxShadow(color: const Color(0xFF95D0DA).withOpacity(0.18), blurRadius: 14, offset: const Offset(0, 4)),
+              BoxShadow(color: const Color(0xFF7BC99A).withOpacity(0.18), blurRadius: 14, offset: const Offset(0, 4)),
             ],
           ),
           child: Column(mainAxisSize: MainAxisSize.min, children: children),
@@ -1968,7 +2418,7 @@ class _GlassIconButtonState extends State<_GlassIconButton> {
                 child: Icon(
                   widget.icon,
                   key: ValueKey(widget.icon),
-                  color: const Color(0xFF0F2D33),
+                  color: const Color(0xFF0F2D1A),
                   size: widget.size * 0.5,
                 ),
               ),
@@ -1988,14 +2438,107 @@ class _GlassIconButtonState extends State<_GlassIconButton> {
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(0.88),
             borderRadius: BorderRadius.circular(11),
-            border: Border.all(color: const Color(0xFF95D0DA).withOpacity(0.40), width: 0.9),
+            border: Border.all(color: const Color(0xFF7BC99A).withOpacity(0.40), width: 0.9),
             boxShadow: [
-              BoxShadow(color: const Color(0xFF95D0DA).withOpacity(0.18), blurRadius: 12, offset: const Offset(0, 3)),
+              BoxShadow(color: const Color(0xFF7BC99A).withOpacity(0.18), blurRadius: 12, offset: const Offset(0, 3)),
             ],
           ),
           child: core,
         ),
       ),
+    );
+  }
+}
+
+// Variante con badge (para botón de capas dentro del mapa, desktop)
+class _GlassIconButtonWithBadge extends StatefulWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final int badgeCount;
+
+  const _GlassIconButtonWithBadge({
+    required this.icon,
+    required this.onTap,
+    required this.badgeCount,
+  });
+
+  @override
+  State<_GlassIconButtonWithBadge> createState() => _GlassIconButtonWithBadgeState();
+}
+
+class _GlassIconButtonWithBadgeState extends State<_GlassIconButtonWithBadge> {
+  bool _pressed = false;
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(11),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.88),
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(color: const Color(0xFF7BC99A).withOpacity(0.40), width: 0.9),
+                boxShadow: [
+                  BoxShadow(color: const Color(0xFF7BC99A).withOpacity(0.18), blurRadius: 12, offset: const Offset(0, 3)),
+                ],
+              ),
+              child: MouseRegion(
+                onEnter: (_) => setState(() => _hovered = true),
+                onExit:  (_) => setState(() => _hovered = false),
+                child: GestureDetector(
+                  onTapDown: (_) => setState(() => _pressed = true),
+                  onTapUp:   (_) => setState(() => _pressed = false),
+                  onTapCancel:   () => setState(() => _pressed = false),
+                  onTap: widget.onTap,
+                  child: AnimatedScale(
+                    scale: _pressed ? 0.9 : (_hovered ? 1.04 : 1.0),
+                    duration: const Duration(milliseconds: 130),
+                    child: Container(
+                      width: 38,
+                      height: 38,
+                      alignment: Alignment.center,
+                      child: Icon(widget.icon, color: const Color(0xFF0F2D1A), size: 19),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (widget.badgeCount > 0)
+          Positioned(
+            right: -4,
+            top: -4,
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E6B45),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1.5),
+                boxShadow: [
+                  BoxShadow(color: const Color(0xFF1E6B45).withOpacity(0.45), blurRadius: 6),
+                ],
+              ),
+              child: Text(
+                '${widget.badgeCount}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  height: 1,
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -2039,7 +2582,7 @@ class _BotAvatarState extends State<_BotAvatar> with SingleTickerProviderStateMi
         ),
         child: Transform.rotate(
           angle: 0.05 * (0.5 - (_c.value % 1.0)).abs(),
-          child: const Icon(Icons.auto_awesome_rounded, color: Color(0xFF3D8A99), size: 23),
+          child: const Icon(Icons.auto_awesome_rounded, color: Color(0xFF1E6B45), size: 23),
         ),
       ),
     );
@@ -2309,11 +2852,11 @@ class _LayersFabState extends State<_LayersFab> {
                   padding: const EdgeInsets.all(4),
                   constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFCC4444),
+                    color: const Color(0xFF1E6B45),
                     shape: BoxShape.circle,
                     border: Border.all(color: Colors.white, width: 2),
                     boxShadow: [
-                      BoxShadow(color: const Color(0xFFCC4444).withOpacity(0.5), blurRadius: 8),
+                      BoxShadow(color: const Color(0xFF1E6B45).withOpacity(0.5), blurRadius: 8),
                     ],
                   ),
                   child: Text(
@@ -2324,6 +2867,107 @@ class _LayersFabState extends State<_LayersFab> {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// FAB de cultivos (móvil) — círculo arriba-izquierda
+class _CropsFab extends StatefulWidget {
+  final VoidCallback onTap;
+  final Color primary;
+  final Color primaryDark;
+  final Color accent;
+
+  const _CropsFab({
+    required this.onTap,
+    required this.primary,
+    required this.primaryDark,
+    required this.accent,
+  });
+
+  @override
+  State<_CropsFab> createState() => _CropsFabState();
+}
+
+class _CropsFabState extends State<_CropsFab> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp:   (_) => setState(() => _pressed = false),
+      onTapCancel:   () => setState(() => _pressed = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _pressed ? 0.90 : 1.0,
+        duration: const Duration(milliseconds: 110),
+        child: Container(
+          width: 54,
+          height: 54,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [widget.accent, widget.primary, widget.primaryDark],
+            ),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: widget.accent.withOpacity(0.55), blurRadius: 18, offset: const Offset(0, 6)),
+            ],
+          ),
+          child: const Icon(Icons.pie_chart_rounded, color: Colors.white, size: 26),
+        ),
+      ),
+    );
+  }
+}
+
+// FAB recentrar (móvil) — abajo-derecha
+class _RecenterFab extends StatefulWidget {
+  final VoidCallback onTap;
+  final Color primary;
+  final Color primaryDark;
+  final Color accent;
+
+  const _RecenterFab({
+    required this.onTap,
+    required this.primary,
+    required this.primaryDark,
+    required this.accent,
+  });
+
+  @override
+  State<_RecenterFab> createState() => _RecenterFabState();
+}
+
+class _RecenterFabState extends State<_RecenterFab> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp:   (_) => setState(() => _pressed = false),
+      onTapCancel:   () => setState(() => _pressed = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _pressed ? 0.90 : 1.0,
+        duration: const Duration(milliseconds: 110),
+        child: Container(
+          width: 54,
+          height: 54,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: widget.primary.withOpacity(0.35), width: 1.2),
+            boxShadow: [
+              BoxShadow(color: widget.accent.withOpacity(0.40), blurRadius: 16, offset: const Offset(0, 5)),
+            ],
+          ),
+          child: Icon(Icons.my_location_rounded, color: widget.primaryDark, size: 26),
         ),
       ),
     );
@@ -2376,12 +3020,12 @@ class _ChatFabState extends State<_ChatFab> with SingleTickerProviderStateMixin 
               gradient: const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFFC2E4EB), Color(0xFF7ABFCC), Color(0xFF3D8A99)],
+                colors: [Color(0xFFB8E5C9), Color(0xFF4CAF7A), Color(0xFF1E6B45)],
               ),
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF95D0DA).withOpacity(0.45 + 0.25 * _glow.value),
+                  color: const Color(0xFF7BC99A).withOpacity(0.45 + 0.25 * _glow.value),
                   blurRadius: 20 + 10 * _glow.value,
                   offset: const Offset(0, 7),
                 ),
@@ -2475,7 +3119,7 @@ class _MobileSheetState extends State<_MobileSheet> with SingleTickerProviderSta
                       width: 38,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFADD6DF),
+                        color: const Color(0xFFB5DCC2),
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -2489,7 +3133,7 @@ class _MobileSheetState extends State<_MobileSheet> with SingleTickerProviderSta
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 24,
                                 fontWeight: FontWeight.w800,
-                                color: const Color(0xFF0F2D33),
+                                color: const Color(0xFF0F2D1A),
                                 letterSpacing: -0.5,
                               ),
                             ),
@@ -2500,16 +3144,16 @@ class _MobileSheetState extends State<_MobileSheet> with SingleTickerProviderSta
                               width: 40,
                               height: 40,
                               decoration: BoxDecoration(
-                                color: const Color(0xFFE8F3F6),
+                                color: const Color(0xFFE8F5EC),
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: const Icon(Icons.close_rounded, color: Color(0xFF0F2D33), size: 22),
+                              child: const Icon(Icons.close_rounded, color: Color(0xFF0F2D1A), size: 22),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    Container(height: 0.8, color: const Color(0xFFADD6DF)),
+                    Container(height: 0.8, color: const Color(0xFFB5DCC2)),
                     Expanded(child: widget.child),
                   ],
                 ),

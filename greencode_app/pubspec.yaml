@@ -32,6 +32,7 @@ dependencies:
   flutter:
     sdk: flutter
   google_fonts: ^6.1.0
+  
 
   
 
@@ -63,6 +64,8 @@ flutter:
     - assets/geojson/valleAtlixco_edafología.geojson
     - assets/geojson/valleAtlixco_usoSuelo.geojson
     - assets/geojson/ValleAtlixco.geojson
+    - assets/logoTlali.png
+
     # o si quieres toda la carpeta:
     #- assets/geojson/
 
